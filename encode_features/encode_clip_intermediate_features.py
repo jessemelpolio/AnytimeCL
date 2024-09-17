@@ -127,7 +127,7 @@ if __name__ == "__main__":
                 model,
                 dataset,
                 store_folder=args.store_folder,
-                dataset_type=args.subsets,
+                dataset_type="train",
             )
 
     if 'test' in args.subsets:
@@ -137,5 +137,5 @@ if __name__ == "__main__":
                 model,
                 dataset,
                 store_folder=args.store_folder,
-                dataset_type=args.subsets,
+                dataset_type="test",
             )
