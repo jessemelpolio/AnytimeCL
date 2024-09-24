@@ -115,58 +115,23 @@ class ModifiedResidualAttentionBlock(nn.Module):
         return x
 
 class CLIPTrainablePart(BaseNetwork):
-    def __init__(self, args, block, ln, proj, use_prompt_tuning=False):
+    def __init__(self, args, block, ln, proj):
         super().__init__(args)
         self.device = args.device
         self.block = block
         self.ln = ln
         self.proj = proj
-        self.use_prompt_tuning = use_prompt_tuning
-
-        if use_prompt_tuning:
-            self._setup_prompt_tuning(args)
 
         # Set up classifier or bias for "other" class
         self.other_classifier = nn.Linear(512, 1) if args.include_the_other_class and args.use_other_classifier else None
         self.other_bias = nn.Parameter(torch.zeros(1)) if args.include_the_other_class else None
 
-    def _setup_prompt_tuning(self, args):
-        # Set up prompt tuning parameters and layers
-        self.visual_prompting_layers = self._get_prompting_layers(args.visual_prompting_layers)
-        self.prompt_tuning_key = nn.ParameterList([nn.Parameter(torch.randn(args.num_prompt_tokens, 768)) for _ in self.visual_prompting_layers])
-        self.linear_mapping = nn.Linear(512, 512) if args.add_linear_mapping else None
-        self.prompt_layer_index_mapping = {l: i for i, l in enumerate(self.visual_prompting_layers)}
-        self.block = nn.ModuleList([ModifiedResidualAttentionBlock(block) for block in self.block])
-
-    @staticmethod
-    def _get_prompting_layers(layers_str):
-        # Parse the string to get the layers for prompt tuning
-        if "," in layers_str:
-            return [int(s) for s in layers_str.split(",")]
-        elif "-" in layers_str:
-            start, end = map(int, layers_str.split("-"))
-            return list(range(start, end + 1))
-        else:
-            return [int(layers_str)]
-
     def forward(self, x):
-        if self.use_prompt_tuning:
-            # Apply prompt tuning if enabled
-            for i, blk in enumerate(self.block):
-                if i in self.visual_prompting_layers:
-                    idx = self.prompt_layer_index_mapping[i]
-                    key = torch.cat([x, self.prompt_tuning_key[idx].view(self.prompt_tuning_key[idx].shape[0], 1, -1).repeat(1, x.shape[1], 1)], dim=0)
-                else:
-                    key = x
-                x = blk(key, key, key)
-        else:
-            x = self.block(x)
+        x = self.block(x)
         x = x.permute(1, 0, 2)
         x = self.ln(x[:, 0, :])
         if self.proj is not None:
             x = x @ self.proj
-        if self.use_prompt_tuning and self.linear_mapping:
-            x = self.linear_mapping(x)
         return x
 
     def forward_with_other_logit(self, x, text_features):

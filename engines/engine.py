@@ -193,13 +193,6 @@ class AnytimeCLEngine(BaseEngine):
         parser.add_argument("--dinov2_config_file", type=str, default="eval/vitb14_pretrain")
         parser.add_argument("--dinov2_data_root", type=str, default="/data/owcl_data/dino_intermediate_features_npy")
         
-        # Prompt tuning parameters
-        parser.add_argument("--use_prompt_tuning", action="store_true")
-        parser.add_argument("--num_prompt_tokens", type=int, default=512)
-        parser.add_argument("--deep_prompt_tuning", action="store_true")
-        parser.add_argument("--add_linear_mapping", action="store_true")
-        parser.add_argument("--visual_prompting_layers", type=str, default="0")
-        
         return parser
 
     def configure_optimizers(self, for_batch_train=False, **kwargs):
@@ -403,7 +396,6 @@ class AnytimeCLEngine(BaseEngine):
                 copy.deepcopy(self.model.clip_branch.transformer_trainable_part),
                 copy.deepcopy(self.model.clip_branch.clip_encoder.visual.ln_post),
                 copy.deepcopy(self.model.clip_branch.clip_encoder.visual.proj),
-                use_prompt_tuning=self.args.use_prompt_tuning
             ).to(self.device)
 
     def _configure_finetuned_model_params(self, trainable_part_model):
@@ -416,22 +408,12 @@ class AnytimeCLEngine(BaseEngine):
         Returns:
             None
         """
-        # Configure parameters for prompt tuning or regular fine-tuning
-        if self.args.use_prompt_tuning:
-            trainable_part_model.prompt_tuning_key.requires_grad = True
-            self.learnable_parameters.append(trainable_part_model.prompt_tuning_key)
-            if self.args.use_key_value_separately:
-                trainable_part_model.prompt_tuning_value.requires_grad = True
-                self.learnable_parameters.append(trainable_part_model.prompt_tuning_value)
-            if self.args.add_linear_mapping:
-                trainable_part_model.linear_mapping.requires_grad = True
-                self.learnable_parameters.append(trainable_part_model.linear_mapping)
-        else:
-            if self.args.fix_finetuned_model:
-                return
-            for param in trainable_part_model.block.parameters():
-                param.requires_grad = True
-            self.learnable_parameters.extend(trainable_part_model.block.parameters())
+        # Configure parameters for  fine-tuning
+        if self.args.fix_finetuned_model:
+            return
+        for param in trainable_part_model.block.parameters():
+            param.requires_grad = True
+        self.learnable_parameters.extend(trainable_part_model.block.parameters())
 
     def _configure_other_class_params(self, trainable_part_model):
         """
@@ -776,7 +758,6 @@ class AnytimeCLEngine(BaseEngine):
                 copy.deepcopy(self.model.clip_branch.transformer_trainable_part),
                 copy.deepcopy(self.model.clip_branch.clip_encoder.visual.ln_post),
                 copy.deepcopy(self.model.clip_branch.clip_encoder.visual.proj),
-                use_prompt_tuning=self.args.use_prompt_tuning
             )
 
     def wake_stage_training_epoch(self, stage, test_datasets, evaluation_tags, wake_batch_train_outside_control, alpha_keys, **kwargs):
