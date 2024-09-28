@@ -2,9 +2,9 @@
 
 ## ECCV 2024 Oral
 
-[![Paper](https://img.shields.io/badge/Paper-PDF-blue)](https://eccv2024.ecva.net/)
-[![Project Page](https://img.shields.io/badge/Project-Page-green)](https://your-project-page-url.com)
-[![YouTube Video](https://img.shields.io/badge/YouTube-Video-red)](https://www.youtube.com/watch?v=your-video-id)
+[![Paper](https://img.shields.io/badge/Paper-PDF-blue)](https://arxiv.org/abs/2409.08518)
+[![Project Page](https://img.shields.io/badge/Project-Page-green)](https://zzhu.vision/anytime_continual_learning/)
+[![YouTube Video](https://img.shields.io/badge/YouTube-Video-red)](https://www.youtube.com/watch?v=gSOpLxQi8jg)
 
 ## Authors
 [Zhen Zhu](https://zzhu.vision) · [Yiming Gong](https://github.com/nickgong1) · [Derek Hoiem](http://dhoiem.cs.illinois.edu)
