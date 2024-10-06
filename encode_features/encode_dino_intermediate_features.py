@@ -5,21 +5,23 @@ import numpy as np
 import os
 from tqdm import tqdm
 
-dir_path = os.path.dirname(os.path.realpath(__file__))
-sys.path.append(os.path.join(dir_path, ".."))
+dir_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.append(dir_path)
+
+# Add the dinov2 folder to the Python path
+dinov2_path = os.path.join(dir_path, "dinov2")
+sys.path.append(dinov2_path)
 
 from options.base_options import BaseOptions
-from models.clip_module import LearnableCLIPModule
+from engines.engine import AnytimeCLEngine
 from models.memory_module import MemoryModule
 from data.tasks import (
     get_single_image_datasets,
 )
 
-sys.path.append(os.path.join(dir_path, "../models"))
+from dinov2.data.transforms import make_classification_eval_transform
 
-from dinov2.models import build_model_from_cfg
-from dinov2.configs import load_and_merge_config
-from dinov2.data.transforms import make_classification_eval_transform, make_classification_train_transform
+from models.dinov2_module import DINOV2Module
 
 
 def get_dino_features(model, dataset, store_folder, dataset_type="train", features_of_the_n_layer_to_last=1):
@@ -111,30 +113,22 @@ if __name__ == "__main__":
 
     opt = BaseOptions()
     module_list = [
-        LearnableCLIPModule,
+        AnytimeCLEngine,
+        DINOV2Module,
         MemoryModule,
         CustomOptions,
     ]
     args = opt.parse(module_list, is_train=True)
     print(args)
 
-    config_file = os.path.join(dir_path, args.dinov2_config_file)
-
     store_path = args.store_folder
     train = 'train' in args.subsets
     val = 'test' in args.subsets
     features_of_the_n_layer_to_last = args.dinov2_train_transformer_block_to_last_index
 
-    cfg = load_and_merge_config(config_file)
-
-    dino_encoder, encoder_embed_dim = build_model_from_cfg(cfg, only_teacher=True)
+    dino_encoder = DINOV2Module(args)
     dino_encoder = dino_encoder.to(args.device)
 
-    weights = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
-    # load the weights
-    dino_encoder.load_state_dict(weights.state_dict())
-
-    # load transform
     transform = make_classification_eval_transform()
     cl_train_datasets, cl_test_datasets = get_single_image_datasets(args, transform=transform)
 

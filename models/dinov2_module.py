@@ -9,9 +9,8 @@ import os
 dinov2_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'dinov2'))
 sys.path.append(dinov2_path)
 
-from dinov2.models import build_model_from_cfg
 from dinov2.configs import load_and_merge_config
-
+from dinov2.models import build_model_from_cfg
 
 class DINOV2Module(BaseNetwork):
     def __init__(self, args, mapping_dim=512):
@@ -34,7 +33,18 @@ class DINOV2Module(BaseNetwork):
         x_norm = self.dino_encoder.norm(x)
         # directly return the cls token
         return x_norm[:, 0]
-
+    
+    def simple_get_intermediate_features_of_the_n_layer_to_last(
+        self,
+        x: torch.Tensor,
+        n: int = 1,  # Layer to take
+    ):
+        if self.dino_encoder.chunked_blocks:
+            outputs = self.dino_encoder._get_intermediate_layers_chunked(x, n)
+        else:
+            outputs = self.dino_encoder._get_intermediate_layers_not_chunked(x, n)
+        return outputs[0]
+    
     def forward(self, x):
         x = self.simple_get_result_through_rest_layers(x, self.args.dinov2_train_transformer_block_to_last_index)
         x = self.mapping(x)
