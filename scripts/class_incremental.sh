@@ -1,6 +1,6 @@
 #!/bin/bash
 OUTPUT_DIR='./results'
-DATA_DIR='/data/owcl_data/intermediate_features_npy'
+DATA_DIR='/data/owcl_data/temporal'
 
 # Define the arrays
 datasets=("CIFAR100" "SUN397" "EuroSAT" "OxfordIIITPet" "Flowers102" "FGVCAircraft" "StanfordCars" "Food101")
@@ -33,6 +33,5 @@ for (( i=0; i<1; i++ )); do
         --csv_file class_incremental.csv \
         --ema_exemplar_per_class_acc \
         --ema_exemplar_per_class_acc_decay ${ema_decay} \
-        --need_compress True \
         --exp_name AnytimeCL_class_incremental
 done
