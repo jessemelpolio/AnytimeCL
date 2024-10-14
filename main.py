@@ -29,7 +29,6 @@ from data.tasks import (
     get_dino_clip_npy_continual_learning_dataset,
     get_single_npy_held_out_compression_dataset,
     get_single_npy_continual_learning_compression_dataset,
-
     get_dino_clip_npy_held_out_dataset,
 )
 
@@ -82,7 +81,8 @@ def main():
             incremental_train_dataset, incremental_test_dataset = get_single_npy_continual_learning_dataset(args)
             _, held_out_test_datasets = get_single_npy_held_out_dataset(args, load_train=False)
 
-    alpha_keys = ["exemplar"] if args.use_dino else ["p_ft", "p_other", "p_ft_and_p_other", "aim", "tuned", "original", "p_ft_0_1"]
+    # alpha_keys = ["exemplar"] if args.use_dino else ["p_ft", "p_other", "p_ft_and_p_other", "aim", "tuned", "original", "p_ft_0_1"]
+    alpha_keys = ["p_ft", "p_other", "p_ft_and_p_other", "aim", "tuned", "original", "p_ft_0_1"]
 
     SEEN = "seen"
     UNSEEN = "unseen"
