@@ -347,11 +347,7 @@ class AnytimeCLEngine(BaseEngine):
             None
         """
         if model is None:
-            if self.args.use_dino:
-                mapping_dim = self.model.clip_branch.clip_encoder.text_projection.shape[-1]
-                trainable_part_model = DINOV2Module(self.args, mapping_dim=mapping_dim).to(self.device)
-            else:
-                trainable_part_model = self._create_clip_trainable_part_model()
+            trainable_part_model = self._create_exemplar_model()
         else:
             trainable_part_model = model.to(self.device)
 
@@ -370,33 +366,9 @@ class AnytimeCLEngine(BaseEngine):
             self._configure_other_class_params(trainable_part_model)
 
         if self.args.use_tuned_text_embedding:
-            self._configure_linear_classifier(trainable_part_model)
+            self._configure_linear_classifier_params(trainable_part_model)
 
         self.trainable_part_model = trainable_part_model
-
-    def _create_clip_trainable_part_model(self):
-        """
-        Create a trainable part model based on the current configuration.
-
-        Returns:
-            torch.nn.Module: The created trainable part model.
-        """
-        # Create a trainable part model based on the configuration
-        if self.args.use_tuned_text_embedding:
-            return CLIPTrainablePartPlusIncrementalClassifier(
-                self.args,
-                copy.deepcopy(self.model.clip_branch.transformer_trainable_part),
-                copy.deepcopy(self.model.clip_branch.clip_encoder.visual.ln_post),
-                copy.deepcopy(self.model.clip_branch.clip_encoder.visual.proj),
-                self.model.enc_dim,
-            ).to(self.device)
-        else:
-            return CLIPTrainablePart(
-                self.args,
-                copy.deepcopy(self.model.clip_branch.transformer_trainable_part),
-                copy.deepcopy(self.model.clip_branch.clip_encoder.visual.ln_post),
-                copy.deepcopy(self.model.clip_branch.clip_encoder.visual.proj),
-            ).to(self.device)
 
     def _configure_finetuned_model_params(self, trainable_part_model):
         """
@@ -434,7 +406,7 @@ class AnytimeCLEngine(BaseEngine):
             trainable_part_model.other_bias.requires_grad = True
             self.learnable_parameters.append(trainable_part_model.other_bias)
 
-    def _configure_linear_classifier(self, trainable_part_model):
+    def _configure_linear_classifier_params(self, trainable_part_model):
         """
         Configure the linear classifier parameters.
 
@@ -577,7 +549,7 @@ class AnytimeCLEngine(BaseEngine):
             raise NotImplementedError("Only 'feature' X_format is supported for DINO")
         return zs_out
 
-    def forward_core(self, X_format, trainable_model, input_X):
+    def clip_forward_core(self, X_format, trainable_model, input_X):
         """
         Perform forward pass for CLIP model.
 
@@ -635,10 +607,10 @@ class AnytimeCLEngine(BaseEngine):
         if self.args.use_dino:
             tuned_out = self.dino_forward_core(X_format, trainable_model, self.X_dino)
         else:
-            tuned_out = self.forward_core(X_format, trainable_model, self.X_clip)
+            tuned_out = self.clip_forward_core(X_format, trainable_model, self.X_clip)
 
         # Get zero-shot features from CLIP
-        original_out = self.forward_core(X_format, self.original_trainable_part_model, self.X_clip)
+        original_out = self.clip_forward_core(X_format, self.original_trainable_part_model, self.X_clip)
         
         # Get classifier output if needed (inference)
         if get_combined_output and not training:
@@ -777,11 +749,11 @@ class AnytimeCLEngine(BaseEngine):
         """
         nodes = self.model.tree.get_trainable_nodes()
         for node in nodes:
-            self._train_node(node, stage, test_datasets, evaluation_tags, wake_batch_train_outside_control, alpha_keys, **kwargs)
+            self._wake_train_node(node, stage, test_datasets, evaluation_tags, wake_batch_train_outside_control, alpha_keys, **kwargs)
 
         torch.cuda.empty_cache()  # Clear CUDA cache to free up memory
 
-    def _train_node(self, node, stage, test_datasets, evaluation_tags, wake_batch_train_outside_control, alpha_keys, **kwargs):
+    def _wake_train_node(self, node, stage, test_datasets, evaluation_tags, wake_batch_train_outside_control, alpha_keys, **kwargs):
         """
         Configure and train a single node.
 
@@ -807,7 +779,7 @@ class AnytimeCLEngine(BaseEngine):
         if wake_batch_train_outside_control:
             self.model.train()  # Set model to training mode
             # Perform a training epoch for the node
-            self.sleep_train_epoch(stage, 0, test_datasets=test_datasets, evaluation_tags=evaluation_tags, wake_evaluation=True, alpha_keys=alpha_keys, node=node, **kwargs)
+            self.train_epoch(stage, 0, test_datasets=test_datasets, evaluation_tags=evaluation_tags, wake_evaluation=True, alpha_keys=alpha_keys, node=node, **kwargs)
             self._after_train_epoch(**kwargs)  # Perform post-epoch operations
 
             # Update sample weights if using weighted sampler
@@ -820,11 +792,6 @@ class AnytimeCLEngine(BaseEngine):
 
         print("Setting the model back to the tree...")
         self.trainable_part_model.eval()  # Set trainable part model to evaluation mode
-
-        # self.trainable_part_model = nn.utils.weight_norm(self.trainable_part_model)
-        # self.trainable_part_model.weight_g = self.trainable_part_model.weight_g.detach()
-        # self.trainable_part_model.weight_v = self.trainable_part_model.weight_v.detach()
-        
 
         node.exemplar_model = copy.copy(self.trainable_part_model)  # Update node's exemplar model
 
@@ -848,11 +815,11 @@ class AnytimeCLEngine(BaseEngine):
         nodes = self.model.tree.get_trainable_nodes()
 
         for node in nodes:
-            self._train_sleep_node(node, train_dataset, test_datasets, evaluation_tags, stage, **kwargs)
+            self._sleep_train_node(node, train_dataset, test_datasets, evaluation_tags, stage, **kwargs)
 
         print("After training all exemplar models...")
 
-    def _train_sleep_node(self, node, train_dataset, test_datasets, evaluation_tags, stage, **kwargs):
+    def _sleep_train_node(self, node, train_dataset, test_datasets, evaluation_tags, stage, **kwargs):
         """
         Train a single node during sleep cycle.
 
@@ -873,39 +840,21 @@ class AnytimeCLEngine(BaseEngine):
         self.configure_optimizers(**kwargs)
 
         # Train for the specified number of epochs
-        for i in range(self.args.start_epoch, self.args.n_epochs):
-            self._train_sleep_epoch(node, stage, i, test_datasets, evaluation_tags, **kwargs)
+        for epoch in range(self.args.start_epoch, self.args.n_epochs):
+            # Evaluate if it's time to do so and test datasets are provided
+            if epoch % self.args.eval_interval == 0 and test_datasets is not None:
+                self._evaluate_sleep(stage, epoch, test_datasets, evaluation_tags, **kwargs)
+
+            self.model.train()  # Set model to training mode
+            # Perform a training epoch
+            self.train_epoch(stage, epoch, node=node, **kwargs)
+            self._after_train_epoch(**kwargs)  # Perform post-epoch operations
+
+            # Save checkpoint if it's time to do so
+            if epoch % self.args.save_interval == 0:
+                self.save_checkpoint(stage, epoch, None, **kwargs)
 
         self._finalize_sleep_training(node, stage, test_datasets, evaluation_tags, **kwargs)
-
-    def _train_sleep_epoch(self, node, stage, epoch, test_datasets, evaluation_tags, **kwargs):
-        """
-        Train for one epoch during sleep cycle.
-
-        Args:
-            node: The node being trained.
-            stage (int): The current training stage.
-            epoch (int): The current epoch.
-            test_datasets: Datasets used for testing/evaluation.
-            evaluation_tags: Tags for evaluation datasets.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            None
-        """
-        # Train for one epoch during sleep cycle
-        # Evaluate if it's time to do so and test datasets are provided
-        if epoch % self.args.eval_interval == 0 and test_datasets is not None:
-            self._evaluate_sleep(stage, epoch, test_datasets, evaluation_tags, **kwargs)
-
-        self.model.train()  # Set model to training mode
-        # Perform a training epoch
-        self.sleep_train_epoch(stage, epoch, node=node, **kwargs)
-        self._after_train_epoch(**kwargs)  # Perform post-epoch operations
-
-        # Save checkpoint if it's time to do so
-        if epoch % self.args.save_interval == 0:
-            self.save_checkpoint(stage, epoch, None, **kwargs)
 
     def _evaluate_sleep(self, stage, epoch, test_datasets, evaluation_tags, **kwargs):
         """
@@ -961,7 +910,7 @@ class AnytimeCLEngine(BaseEngine):
         node.exemplar_model = copy.deepcopy(self.trainable_part_model)  # Update node's exemplar model
         node.new_data_points = 0  # Reset the count of new data points
 
-    def sleep_train_epoch(self, stage, epoch, set_train=True, test_datasets=None, evaluation_tags=None, wake_evaluation=False, alpha_keys=None, node=None, **kwargs):
+    def train_epoch(self, stage, epoch, set_train=True, test_datasets=None, evaluation_tags=None, wake_evaluation=False, alpha_keys=None, node=None, **kwargs):
         """
         Train for one epoch during sleep cycle.
 
@@ -991,8 +940,9 @@ class AnytimeCLEngine(BaseEngine):
         # Iterate through the sleep training data loader
         for i, (batch) in enumerate(tqdm(self.sleep_train_loader)):
             # Check if wake evaluation should be performed
-            if self._should_evaluate_wake(i, evaluation_interval, wake_evaluation):
-                self._evaluate_wake(test_datasets, evaluation_tags, stage, epoch, i, alpha_keys, **kwargs)
+            if (i + 1) % evaluation_interval == 0 and wake_evaluation:
+                acc = self.evaluate(test_datasets, stage=stage, epoch=i, evaluation_tags=None, alpha_keys=alpha_keys, **kwargs)
+                self._log_wake_evaluation(stage, epoch, i, acc)  # Log the results
 
             # Process the current batch
             loss, batch_correct = self._process_batch_training(batch, node)
@@ -1004,7 +954,7 @@ class AnytimeCLEngine(BaseEngine):
             batch_num += 1
 
         # Log the results of this epoch
-        self._log_epoch_results(stage, epoch, train_loss, batch_num, correct, total)
+        self._log_train_epoch_results(stage, epoch, train_loss, batch_num, correct, total)
         
     def _common_forward_pass(self, batch, alpha_keys=None, training=False):
         """
@@ -1128,23 +1078,6 @@ class AnytimeCLEngine(BaseEngine):
         else:
             return self.sleep_criterion(tuned_out, label_features, targets)
 
-    def _prepare_inputs(self, raw_inputs, label_features, targets):
-        """
-        Prepare inputs for processing by moving them to the appropriate device.
-
-        Args:
-            raw_inputs (torch.Tensor): Raw input data.
-            label_features (torch.Tensor): Label features.
-            targets (torch.Tensor): Target labels.
-
-        Returns:
-            tuple: A tuple containing the prepared inputs.
-        """
-        raw_inputs = raw_inputs[0].to(self.device)
-        label_features = label_features.to(self.device)
-        targets = targets.to(self.device)
-        return raw_inputs, label_features, targets
-
     def _setup_wake_evaluation(self, wake_evaluation):
         """
         Setup wake evaluation parameters.
@@ -1160,39 +1093,6 @@ class AnytimeCLEngine(BaseEngine):
         # Calculate evaluation interval based on the ratio specified in args
         evaluation_interval = max(int(len(self.sleep_train_loader) * self.args.wake_evaluation_iter_ratio), 1)
         return wake_evaluation, evaluation_interval
-
-    def _should_evaluate_wake(self, i, evaluation_interval, wake_evaluation):
-        """
-        Determine if wake evaluation should be performed at this iteration.
-
-        Args:
-            i (int): The current iteration.
-            evaluation_interval (int): The interval at which wake evaluation should be performed.
-            wake_evaluation (bool): Whether wake evaluation is enabled.
-
-        Returns:
-            bool: Whether wake evaluation should be performed at this iteration.
-        """
-        return (i + 1) % evaluation_interval == 0 and wake_evaluation
-
-    def _evaluate_wake(self, test_datasets, evaluation_tags, stage, epoch, i, alpha_keys, **kwargs):
-        """
-        Evaluate the model on test datasets during wake cycle.
-
-        Args:
-            test_datasets: Datasets used for evaluation.
-            evaluation_tags: Tags for evaluation datasets.
-            stage (int): The current training stage.
-            epoch (int): The current epoch.
-            i (int): The current iteration.
-            alpha_keys: Keys for alpha values used in evaluation.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            None
-        """
-        acc = self.evaluate(test_datasets, stage=stage, epoch=i, evaluation_tags=None, alpha_keys=alpha_keys, **kwargs)
-        self._log_wake_evaluation(stage, epoch, i, acc)  # Log the results
 
     def _log_wake_evaluation(self, stage, epoch, i, acc):
         """
@@ -1211,47 +1111,6 @@ class AnytimeCLEngine(BaseEngine):
         with open(csv_file, "a") as outfile:
             writer = csv.writer(outfile)
             writer.writerow(["Stage", stage, "Epoch", epoch, "iter", i, "acc", acc])
-
-    def _compute_loss_and_similarity(self, tuned_out, label_features, targets):
-        """
-        Compute loss and similarity based on model configuration.
-
-        Args:
-            tuned_out (torch.Tensor): Model outputs.
-            label_features (torch.Tensor): Label features.
-            targets (torch.Tensor): Target labels.
-
-        Returns:
-            tuple: A tuple containing the loss and similarity.
-        """
-        if self.args.use_tuned_text_embedding:
-            # Use cross-entropy loss if using a trainable linear classifier
-            loss = F.cross_entropy(tuned_out, targets)
-            similarity = tuned_out
-        else:
-            # Use custom sleep criterion otherwise
-            loss = self.sleep_criterion(tuned_out, label_features, targets)
-            similarity = tuned_out
-        return loss, similarity
-
-    def _compute_similarity(self, tuned_out):
-        """
-        Compute similarity based on the criteria used.
-
-        Args:
-            tuned_out (torch.Tensor): Model outputs.
-
-        Returns:
-            torch.Tensor: The computed similarity.
-
-        Raises:
-            NotImplementedError: If the specified criteria is not implemented.
-        """
-        if self.criteria in ["cs", "osce", "osce_other"]:
-            # Compute cosine similarity and apply softmax
-            return (100 * tuned_out @ self.train_target_class_features.T).softmax(dim=-1)
-        else:
-            raise NotImplementedError
 
     def _update_ema_records(self, node, tuned_similarity, original_similarity, targets, original_targets, new):
         """
@@ -1274,7 +1133,7 @@ class AnytimeCLEngine(BaseEngine):
         original_pred = original_similarity.argmax(dim=-1)
         node.original_acc_recorder.update(original_pred, targets, original_targets, new)
 
-    def _log_epoch_results(self, stage, epoch, train_loss, batch_num, correct, total):
+    def _log_train_epoch_results(self, stage, epoch, train_loss, batch_num, correct, total):
         """
         Log training results for each epoch.
 
@@ -1356,19 +1215,14 @@ class AnytimeCLEngine(BaseEngine):
         self.model.find_overlapping_indices()
 
         if self.args.ema_exemplar_per_class_acc:
-            self._update_ema_accuracies(stage, tag, epoch)
+            self._update_ema_accuracies()
             self.model.compute_tuned_and_original_p_ft()
 
         self.model.eval()
 
-    def _update_ema_accuracies(self, stage, tag, epoch):
+    def _update_ema_accuracies(self):
         """
         Update and save Exponential Moving Average (EMA) accuracies for all leaf nodes.
-
-        Args:
-            stage (int): The current evaluation stage.
-            tag (str): The tag for the evaluation.
-            epoch (int): The current epoch.
 
         Returns:
             None
@@ -1381,28 +1235,7 @@ class AnytimeCLEngine(BaseEngine):
         self.model.tuned_model_probs = tuned_accs
         self.model.original_model_probs = original_accs
         
-        # self._save_accuracies_to_csv(tuned_accs, original_accs, stage, tag, epoch)
-        
         self.model.compute_tuned_and_original_p_ft()
-
-    def _save_accuracies_to_csv(self, tuned_accs, original_accs, stage, tag, epoch):
-        """
-        Save tuned and original accuracies to a CSV file for later analysis.
-
-        Args:
-            tuned_accs (list): List of tuned accuracies.
-            original_accs (list): List of original accuracies.
-            stage (int): The current evaluation stage.
-            tag (str): The tag for the evaluation.
-            epoch (int): The current epoch.
-
-        Returns:
-            None
-        """
-        csv_file = os.path.join(self.args.results_dir, "ctar_and_czs.csv")
-        with open(csv_file, "a") as outfile:
-            writer = csv.writer(outfile)
-            writer.writerow(["Tag", tag, "Stage", stage, "Epoch", epoch, "ctar", tuned_accs, "czs", original_accs])
 
     def evaluate(self, test_datasets, stage=0, epoch=0, evaluation_tags=None, cross_validation=True, evaluate_seen_unseen=True, alpha_keys=None, **kwargs):
         """
